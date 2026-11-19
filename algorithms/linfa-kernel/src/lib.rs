@@ -472,11 +472,21 @@ impl<
 /// The exponent of the Gaussian kernel, `-‖a - b‖² / eps`.
 #[inline]
 fn gaussian_exponent<F: Float>(a: ArrayView1<F>, b: ArrayView1<F>, eps: F) -> F {
-    let distance = a
-        .iter()
-        .zip(b.iter())
-        .map(|(x, y)| (*x - *y) * (*x - *y))
-        .sum::<F>();
+    let distance = match (a.as_slice(), b.as_slice()) {
+        // Contiguous rows, the usual case: a plain slice loop compiles to a tight body whatever
+        // the surrounding code, where ndarray's strided iterators do not reliably. Same order
+        // of summation, so the same result.
+        (Some(a), Some(b)) => a
+            .iter()
+            .zip(b)
+            .map(|(x, y)| (*x - *y) * (*x - *y))
+            .sum::<F>(),
+        _ => a
+            .iter()
+            .zip(b.iter())
+            .map(|(x, y)| (*x - *y) * (*x - *y))
+            .sum::<F>(),
+    };
 
     -distance / eps
 }
