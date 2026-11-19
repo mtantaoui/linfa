@@ -63,14 +63,34 @@ pub trait Float:
     fn cast<T: NumCast>(x: T) -> Self {
         NumCast::from(x).unwrap()
     }
+
+    /// Replaces every element of `x` by its exponential.
+    ///
+    /// With the `simdly` feature, `f32` and `f64` use SIMD kernels within 1 ULP of the exact
+    /// result.
+    fn exp_in_place(x: &mut [Self]) {
+        for v in x {
+            *v = v.exp();
+        }
+    }
 }
 
 impl Float for f32 {
     type Lapack = f32;
+
+    #[cfg(feature = "simdly")]
+    fn exp_in_place(x: &mut [f32]) {
+        simdly::SliceMath::exp_in_place(x)
+    }
 }
 
 impl Float for f64 {
     type Lapack = f64;
+
+    #[cfg(feature = "simdly")]
+    fn exp_in_place(x: &mut [f64]) {
+        simdly::SliceMath::exp_in_place(x)
+    }
 }
 
 /// Discrete labels

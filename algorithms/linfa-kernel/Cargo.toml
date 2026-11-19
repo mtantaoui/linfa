@@ -15,6 +15,8 @@ categories = ["algorithms", "mathematics", "science"]
 [features]
 default = []
 serde = ["serde_crate", "ndarray/serde", "sprs/serde"]
+# SIMD `exp` for the dense Gaussian kernel (f32 and f64), within 1 ULP. Requires Rust 1.89.
+simdly = ["linfa/simdly"]
 
 [dependencies.serde_crate]
 package = "serde"
@@ -30,3 +32,13 @@ sprs = { version = "=0.11.2", default-features = false }
 
 linfa = { version = "0.8.1", path = "../.." }
 linfa-nn = { version = "0.8.1", path = "../linfa-nn" }
+
+[dev-dependencies]
+criterion = "0.5"
+linfa = { version = "0.8.1", path = "../..", features = ["benchmarks"] }
+rand_xoshiro = "0.6"
+ndarray-rand = "0.15"
+
+[[bench]]
+name = "gaussian"
+harness = false

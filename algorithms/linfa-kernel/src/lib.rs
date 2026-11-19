@@ -272,15 +272,7 @@ pub enum KernelMethod<F> {
 impl<F: Float> KernelMethod<F> {
     pub fn distance(&self, a: ArrayView1<F>, b: ArrayView1<F>) -> F {
         match *self {
-            KernelMethod::Gaussian(eps) => {
-                let distance = a
-                    .iter()
-                    .zip(b.iter())
-                    .map(|(x, y)| (*x - *y) * (*x - *y))
-                    .sum::<F>();
-
-                (-distance / eps).exp()
-            }
+            KernelMethod::Gaussian(eps) => gaussian_exponent(a, b, eps).exp(),
             KernelMethod::Linear => a.mul(&b).sum(),
             KernelMethod::Polynomial(c, d) => (a.mul(&b).sum() + c).powf(d),
         }
@@ -477,19 +469,42 @@ impl<
     }
 }
 
+/// The exponent of the Gaussian kernel, `-‖a - b‖² / eps`.
+#[inline]
+fn gaussian_exponent<F: Float>(a: ArrayView1<F>, b: ArrayView1<F>, eps: F) -> F {
+    let distance = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| (*x - *y) * (*x - *y))
+        .sum::<F>();
+
+    -distance / eps
+}
+
 fn dense_from_fn<F: Float, D: Data<Elem = F>>(
     dataset: &ArrayBase<D, Ix2>,
     method: &KernelMethod<F>,
 ) -> Array2<F> {
     let n_observations = dataset.len_of(Axis(0));
-    let mut similarity = Array2::eye(n_observations);
+    let mut similarity = Array2::zeros((n_observations, n_observations));
 
-    for i in 0..n_observations {
-        for j in 0..n_observations {
-            let a = dataset.row(i);
-            let b = dataset.row(j);
-
-            similarity[(i, j)] = method.distance(a, b);
+    for (i, mut row) in similarity.rows_mut().into_iter().enumerate() {
+        let a = dataset.row(i);
+        match *method {
+            // Fill the row with the exponents first, then take their exponential in one pass,
+            // which vectorises.
+            KernelMethod::Gaussian(eps) => {
+                for (j, v) in row.iter_mut().enumerate() {
+                    *v = gaussian_exponent(a, dataset.row(j), eps);
+                }
+                // The rows of a new standard-layout matrix are contiguous.
+                F::exp_in_place(row.as_slice_mut().unwrap());
+            }
+            _ => {
+                for (j, v) in row.iter_mut().enumerate() {
+                    *v = method.distance(a, dataset.row(j));
+                }
+            }
         }
     }
 
@@ -612,6 +627,48 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn dense_gaussian_matches_distance() {
+        fn ulps<F: Float>(a: F, b: F) -> u64 {
+            let (a, b) = (a.to_f64().unwrap(), b.to_f64().unwrap());
+            if std::mem::size_of::<F>() == 4 {
+                ((a as f32).to_bits() as i64 - (b as f32).to_bits() as i64).unsigned_abs()
+            } else {
+                (a.to_bits() as i64 - b.to_bits() as i64).unsigned_abs()
+            }
+        }
+
+        fn check<F: Float>() {
+            // Deterministic points in [0, 1)^d.
+            let mut s = 0x9E37_79B9_7F4A_7C15u64;
+            for &d in &[1, 2, 7, 33] {
+                let x = Array2::from_shape_simple_fn((61, d), || {
+                    s ^= s << 13;
+                    s ^= s >> 7;
+                    s ^= s << 17;
+                    F::cast((s >> 11) as f64 / (1u64 << 53) as f64)
+                });
+                let method = KernelMethod::Gaussian(F::cast(d as f64 / 3.0));
+                let k = dense_from_fn(&x, &method);
+                for i in 0..x.nrows() {
+                    for j in 0..x.nrows() {
+                        let expected = method.distance(x.row(i), x.row(j));
+                        let diff = ulps(k[(i, j)], expected);
+                        // Without simdly the same `exp` is applied to the same exponent.
+                        #[cfg(not(feature = "simdly"))]
+                        assert_eq!(diff, 0, "({}, {}), d = {}", i, j, d);
+                        // simdly's `exp` is within 1 ULP of the exact value, std's too.
+                        #[cfg(feature = "simdly")]
+                        assert!(diff <= 2, "({}, {}), d = {}: {} ULP", i, j, d, diff);
+                    }
+                }
+            }
+        }
+
+        check::<f32>();
+        check::<f64>();
     }
 
     #[test]
