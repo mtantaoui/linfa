@@ -522,17 +522,29 @@ pub fn dense_gaussian_with<F: Float, D: Data<Elem = F>>(
     exp_in_place: impl Fn(&mut [F]),
 ) -> Array2<F> {
     let n_observations = dataset.len_of(Axis(0));
-    let mut similarity = Array2::zeros((n_observations, n_observations));
+    // The dataset feature by feature: row `k` holds feature `k` of every point, contiguously.
+    let features = dataset.t().as_standard_layout().into_owned();
+    let mut similarity = Array2::<F>::zeros((n_observations, n_observations));
 
     for (i, mut row) in similarity.rows_mut().into_iter().enumerate() {
-        let a = dataset.row(i);
-        // Fill the row with the exponents first, then take their exponential in one pass,
-        // which vectorises.
-        for (j, v) in row.iter_mut().enumerate() {
-            *v = gaussian_exponent(a, dataset.row(j), eps);
-        }
         // The rows of a new standard-layout matrix are contiguous.
-        exp_in_place(row.as_slice_mut().unwrap());
+        let row = row.as_slice_mut().unwrap();
+
+        // Row `i` of the squared distances, one feature at a time across all points, which
+        // vectorises across points. Each distance is still summed feature by feature in order,
+        // as `gaussian_exponent` does, so the result is the same.
+        for (feature, &x_i) in features.rows().into_iter().zip(dataset.row(i)) {
+            let feature = feature.as_slice().unwrap();
+            for (sum, &x_j) in row.iter_mut().zip(feature) {
+                let diff = x_j - x_i;
+                *sum += diff * diff;
+            }
+        }
+
+        for v in row.iter_mut() {
+            *v = -*v / eps;
+        }
+        exp_in_place(row);
     }
 
     similarity

@@ -29,7 +29,7 @@ fn bench_type<F: Float>(c: &mut Criterion, ty: &str) {
         config::set_default_benchmark_configs(&mut group);
         group.throughput(Throughput::Elements((n * n) as u64));
 
-        for d in [2, 16, 64] {
+        for d in [2, 16, 64, 120] {
             let x: Array2<F> =
                 Array2::random_using((n, d), Uniform::new(0., 1.), &mut rng).mapv(F::cast);
             // The mean squared distance between uniform points in [0, 1)^d is d/6: with
