@@ -1,14 +1,25 @@
-//! Dense Gaussian kernel construction.
+//! Dense Gaussian kernel construction, with the scalar `exp` (`std`) and, with the `simdly`
+//! feature, simdly's SIMD `exp` (`simdly`), back to back for each set of parameters:
 //!
-//! Compare `cargo bench -p linfa-kernel --bench gaussian` with and without `--features simdly`.
+//!     cargo bench -p linfa-kernel --bench gaussian --features simdly
+//!
+//! Both run the same kernel code (`dense_gaussian_with`); only the element-wise `exp` differs.
+//! Without the feature only `std` runs.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use linfa::benchmarks::config;
 use linfa::Float;
-use linfa_kernel::{Kernel, KernelMethod, KernelType};
+use linfa_kernel::dense_gaussian_with;
 use ndarray::Array2;
 use ndarray_rand::{rand::SeedableRng, rand_distr::Uniform, RandomExt};
 use rand_xoshiro::Xoshiro256Plus;
+
+/// The element-wise `exp` without the `simdly` feature.
+fn std_exp_in_place<F: Float>(x: &mut [F]) {
+    for v in x {
+        *v = v.exp();
+    }
+}
 
 fn bench_type<F: Float>(c: &mut Criterion, ty: &str) {
     let mut rng = Xoshiro256Plus::seed_from_u64(42);
@@ -23,12 +34,14 @@ fn bench_type<F: Float>(c: &mut Criterion, ty: &str) {
                 Array2::random_using((n, d), Uniform::new(0., 1.), &mut rng).mapv(F::cast);
             // The mean squared distance between uniform points in [0, 1)^d is d/6: with
             // eps = d/3 the exponents average -1/2, a typical bandwidth.
-            let params = Kernel::params()
-                .kind(KernelType::Dense)
-                .method(KernelMethod::Gaussian(F::cast(d as f64 / 3.0)));
+            let eps = F::cast(d as f64 / 3.0);
 
-            group.bench_with_input(BenchmarkId::new("d", d), &x, |b, x| {
-                b.iter(|| Kernel::new(x.view(), &params))
+            group.bench_with_input(BenchmarkId::new("std", d), &x, |b, x| {
+                b.iter(|| dense_gaussian_with(x, eps, std_exp_in_place))
+            });
+            #[cfg(feature = "simdly")]
+            group.bench_with_input(BenchmarkId::new("simdly", d), &x, |b, x| {
+                b.iter(|| dense_gaussian_with(x, eps, F::exp_in_place))
             });
         }
         group.finish();

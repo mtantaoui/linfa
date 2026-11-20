@@ -495,27 +495,44 @@ fn dense_from_fn<F: Float, D: Data<Elem = F>>(
     dataset: &ArrayBase<D, Ix2>,
     method: &KernelMethod<F>,
 ) -> Array2<F> {
+    if let KernelMethod::Gaussian(eps) = *method {
+        return dense_gaussian_with(dataset, eps, F::exp_in_place);
+    }
+
+    let n_observations = dataset.len_of(Axis(0));
+    let mut similarity = Array2::zeros((n_observations, n_observations));
+    for (i, mut row) in similarity.rows_mut().into_iter().enumerate() {
+        let a = dataset.row(i);
+        for (j, v) in row.iter_mut().enumerate() {
+            *v = method.distance(a, dataset.row(j));
+        }
+    }
+
+    similarity
+}
+
+/// Dense Gaussian kernel matrix, with `exp` applied by `exp_in_place` to one row at a time.
+///
+/// [`Kernel::new`] calls it with [`Float::exp_in_place`]. Public only so that the benchmarks
+/// can compare implementations of `exp` on otherwise identical code; not part of the API.
+#[doc(hidden)]
+pub fn dense_gaussian_with<F: Float, D: Data<Elem = F>>(
+    dataset: &ArrayBase<D, Ix2>,
+    eps: F,
+    exp_in_place: impl Fn(&mut [F]),
+) -> Array2<F> {
     let n_observations = dataset.len_of(Axis(0));
     let mut similarity = Array2::zeros((n_observations, n_observations));
 
     for (i, mut row) in similarity.rows_mut().into_iter().enumerate() {
         let a = dataset.row(i);
-        match *method {
-            // Fill the row with the exponents first, then take their exponential in one pass,
-            // which vectorises.
-            KernelMethod::Gaussian(eps) => {
-                for (j, v) in row.iter_mut().enumerate() {
-                    *v = gaussian_exponent(a, dataset.row(j), eps);
-                }
-                // The rows of a new standard-layout matrix are contiguous.
-                F::exp_in_place(row.as_slice_mut().unwrap());
-            }
-            _ => {
-                for (j, v) in row.iter_mut().enumerate() {
-                    *v = method.distance(a, dataset.row(j));
-                }
-            }
+        // Fill the row with the exponents first, then take their exponential in one pass,
+        // which vectorises.
+        for (j, v) in row.iter_mut().enumerate() {
+            *v = gaussian_exponent(a, dataset.row(j), eps);
         }
+        // The rows of a new standard-layout matrix are contiguous.
+        exp_in_place(row.as_slice_mut().unwrap());
     }
 
     similarity
